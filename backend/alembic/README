@@ -1,0 +1,6 @@
+Database migrations for Exception-Manager.
+
+Apply with:
+    .venv/bin/alembic -c backend/alembic.ini upgrade head
+
+Production deployments must run migrations as a controlled release step. Do not use metadata create_all in production.
