@@ -1,0 +1,97 @@
+name: exception-manager
+
+services:
+  postgres:
+    image: postgres:17.5-alpine
+    environment:
+      POSTGRES_DB: exception_manager
+      POSTGRES_USER: exception_manager
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U exception_manager -d exception_manager"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  clamav:
+    image: clamav/clamav:1.4.6
+    volumes:
+      - clamav-data:/var/lib/clamav
+    healthcheck:
+      test: ["CMD", "clamdscan", "--ping", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+    restart: unless-stopped
+
+  api:
+    image: exception-manager-backend:${APP_IMAGE_TAG:-local}
+    build:
+      context: .
+    init: true
+    command:
+      - sh
+      - -c
+      - >-
+        alembic -c alembic.ini upgrade head &&
+        python -m app.db.seed &&
+        exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+    env_file: .env
+    environment:
+      STORAGE_ROOT: /app/storage
+      BACKUP_DIRECTORY: /app/storage/backups
+      ATTACHMENT_SCAN_MODE: clamav
+      CLAMAV_HOST: clamav
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?Set APP_ENCRYPTION_KEY in .env}
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:?Set BACKUP_ENCRYPTION_KEY in .env}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clamav:
+        condition: service_healthy
+    volumes:
+      - app-storage:/app/storage
+    ports:
+      - "${APP_BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-8000}:8000"
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  worker:
+    image: exception-manager-backend:${APP_IMAGE_TAG:-local}
+    build:
+      context: .
+    init: true
+    command: ["python", "-m", "app.workers.run"]
+    healthcheck:
+      disable: true
+    working_dir: /app/backend
+    env_file: .env
+    environment:
+      STORAGE_ROOT: /app/storage
+      BACKUP_DIRECTORY: /app/storage/backups
+      ATTACHMENT_SCAN_MODE: clamav
+      CLAMAV_HOST: clamav
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?Set APP_ENCRYPTION_KEY in .env}
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:?Set BACKUP_ENCRYPTION_KEY in .env}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+    depends_on:
+      api:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      clamav:
+        condition: service_healthy
+    volumes:
+      - app-storage:/app/storage
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  clamav-data:
+  app-storage:
